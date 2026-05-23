@@ -1,5 +1,5 @@
 {
-  "name": "txmd5-server",
+  "name": "txmd5-api",
   "version": "1.0.0",
   "main": "server.js",
   "scripts": {

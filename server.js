@@ -5,86 +5,40 @@ const fs = require("fs");
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// ===== CẤU HÌNH =====
-const MIN_SESSIONS = 4000;
+// ===== CONFIG =====
 const MAX_SESSIONS = 10000;
-const FETCH_PER_REQUEST = 100;
 const FETCH_INTERVAL = 2000;
 const AUTO_SAVE_INTERVAL = 30000;
 
 const API_URL =
   "https://wtxmd52.tele68.com/v1/txmd5/lite-sessions?cp=R&cl=R&pf=web&at=62385f65eb49fcb34c72a7d6489ad91d";
 
-let predictionHistory = { hu: [], md5: [] };
-const MAX_HISTORY = 100;
+// ===== STORE =====
+let sessionsStore = [];
 
-let lastProcessedPhien = {
-  hu: null,
-  md5: null,
-};
+function getTaiXiu(total) {
+  return total >= 11 ? "TÀI" : "XỈU";
+}
 
-// ===== KHO DỮ LIỆU =====
-let sessionsStore = {
-  hu: [],
-  md5: [],
-};
-
-let learningData = {
-  hu: {
-    predictions: [],
-    patternStats: {},
-    totalPredictions: 0,
-    correctPredictions: 0,
-    patternWeights: {},
-    lastUpdate: null,
-    streakAnalysis: {
-      wins: 0,
-      losses: 0,
-      currentStreak: 0,
-      bestStreak: 0,
-      worstStreak: 0,
-    },
-    adaptiveThresholds: {},
-    recentAccuracy: [],
-  },
-
-  md5: {
-    predictions: [],
-    patternStats: {},
-    totalPredictions: 0,
-    correctPredictions: 0,
-    patternWeights: {},
-    lastUpdate: null,
-    streakAnalysis: {
-      wins: 0,
-      losses: 0,
-      currentStreak: 0,
-      bestStreak: 0,
-      worstStreak: 0,
-    },
-    adaptiveThresholds: {},
-    recentAccuracy: [],
-  },
-};
-
-// ===== LOAD FILE =====
+// ===== LOAD =====
 function loadData() {
   try {
     if (fs.existsSync("data.json")) {
       const raw = fs.readFileSync("data.json");
       const parsed = JSON.parse(raw);
 
-      sessionsStore = parsed.sessionsStore || sessionsStore;
-      learningData = parsed.learningData || learningData;
+      sessionsStore = parsed.sessionsStore || [];
 
-      console.log("✅ Đã load dữ liệu cũ");
+      console.log(
+        `✅ Load ${sessionsStore.length} phiên`
+      );
     }
-  } catch (err) {
-    console.log("❌ Lỗi load data:", err.message);
+  } catch (e) {
+    console.log("❌ Load lỗi:", e.message);
   }
 }
 
-// ===== SAVE FILE =====
+// ===== SAVE =====
 function saveData() {
   try {
     fs.writeFileSync(
@@ -92,70 +46,69 @@ function saveData() {
       JSON.stringify(
         {
           sessionsStore,
-          learningData,
         },
         null,
         2
       )
     );
 
-    console.log("💾 Đã lưu dữ liệu");
-  } catch (err) {
-    console.log("❌ Lỗi save:", err.message);
+    console.log("💾 Saved");
+  } catch (e) {
+    console.log("❌ Save lỗi:", e.message);
   }
 }
 
-// ===== PHÂN TÍCH KẾT QUẢ =====
-function getResult(total) {
-  return total >= 11 ? "TÀI" : "XỈU";
-}
-
 // ===== THUẬT TOÁN =====
-function analyzePrediction(type) {
-  const data = sessionsStore[type];
-
-  if (data.length < 20) {
+function predict() {
+  if (sessionsStore.length < 10) {
     return {
       prediction: "ĐANG HỌC",
       confidence: 0,
     };
   }
 
-  const recent = data.slice(-20);
+  const recent = sessionsStore.slice(-20);
 
   let tai = 0;
   let xiu = 0;
 
-  recent.forEach((item) => {
-    if (item.result === "TÀI") tai++;
+  recent.forEach((i) => {
+    if (i.result === "TÀI") tai++;
     else xiu++;
   });
 
-  const prediction = tai > xiu ? "XỈU" : "TÀI";
+  const prediction =
+    tai > xiu ? "XỈU" : "TÀI";
 
   const confidence =
-    Math.abs(tai - xiu) / recent.length * 100;
+    (
+      (Math.abs(tai - xiu) / 20) *
+      100
+    ).toFixed(2);
 
   return {
     prediction,
-    confidence: confidence.toFixed(2),
+    confidence,
     tai,
     xiu,
   };
 }
 
-// ===== FETCH DATA =====
+// ===== FETCH =====
 async function fetchSessions() {
   try {
     const response = await axios.get(API_URL);
 
+    const data = response.data;
+
+    // API tele68 trả ở đây
     const list =
-      response.data?.data ||
-      response.data?.sessions ||
+      data?.data?.sessions ||
+      data?.data ||
       [];
 
     if (!Array.isArray(list)) {
-      console.log("❌ API không trả về mảng");
+      console.log("❌ Không có mảng sessions");
       return;
     }
 
@@ -163,26 +116,21 @@ async function fetchSessions() {
 
     for (const item of list) {
       const phien =
-        item.phien ||
-        item.session ||
         item.sid ||
-        item.id;
+        item.session ||
+        item.phien;
 
       if (!phien) continue;
 
-      if (
-        sessionsStore.md5.find(
-          (x) => x.phien == phien
-        )
-      ) {
-        continue;
-      }
+      // tránh trùng
+      const exists = sessionsStore.find(
+        (x) => x.phien == phien
+      );
 
-      const dice =
-        item.dice ||
-        item.xucxac ||
-        item.result_dices ||
-        [];
+      if (exists) continue;
+
+      // xúc xắc
+      const dice = item.dice || [];
 
       let total = 0;
 
@@ -191,89 +139,90 @@ async function fetchSessions() {
           (a, b) => a + Number(b),
           0
         );
-      } else {
-        total =
-          Number(item.total) ||
-          Number(item.tong) ||
-          0;
       }
 
-      const result = getResult(total);
+      const result = getTaiXiu(total);
 
-      const sessionData = {
+      sessionsStore.push({
         phien,
         dice,
         total,
         result,
+        raw: item,
         time: Date.now(),
-      };
-
-      sessionsStore.md5.push(sessionData);
+      });
 
       added++;
     }
 
-    // Giới hạn 10000 phiên
+    // sắp xếp phiên
+    sessionsStore.sort(
+      (a, b) => Number(a.phien) - Number(b.phien)
+    );
+
+    // giới hạn 10000 phiên
     if (
-      sessionsStore.md5.length > MAX_SESSIONS
+      sessionsStore.length > MAX_SESSIONS
     ) {
-      sessionsStore.md5 =
-        sessionsStore.md5.slice(
+      sessionsStore =
+        sessionsStore.slice(
           -MAX_SESSIONS
         );
     }
 
-    learningData.md5.lastUpdate =
-      new Date().toISOString();
-
-    const analysis =
-      analyzePrediction("md5");
+    const p = predict();
 
     console.log(
-      `📥 +${added} phiên | Tổng: ${sessionsStore.md5.length}`
+      `📥 +${added} | Tổng ${sessionsStore.length}`
     );
 
     console.log(
-      `🎯 Dự đoán: ${analysis.prediction} | Độ tin cậy: ${analysis.confidence}%`
+      `🎯 ${p.prediction} (${p.confidence}%)`
     );
-  } catch (err) {
+  } catch (e) {
     console.log(
       "❌ Fetch lỗi:",
-      err.message
+      e.message
     );
   }
 }
 
 // ===== API =====
 app.get("/", (req, res) => {
-  const analysis =
-    analyzePrediction("md5");
+  const p = predict();
+
+  const latest =
+    sessionsStore[
+      sessionsStore.length - 1
+    ] || null;
 
   res.json({
     status: "running",
+
     totalSessions:
-      sessionsStore.md5.length,
-    minSessions: MIN_SESSIONS,
-    maxSessions: MAX_SESSIONS,
+      sessionsStore.length,
+
     prediction:
-      analysis.prediction,
+      p.prediction,
+
     confidence:
-      analysis.confidence,
-    tai: analysis.tai,
-    xiu: analysis.xiu,
-    lastUpdate:
-      learningData.md5.lastUpdate,
-    latest:
-      sessionsStore.md5[
-        sessionsStore.md5.length - 1
-      ] || null,
+      p.confidence,
+
+    tai: p.tai || 0,
+    xiu: p.xiu || 0,
+
+    latest,
+
+    history: sessionsStore
+      .slice(-50)
+      .reverse(),
   });
 });
 
 // ===== START =====
 app.listen(PORT, async () => {
   console.log(
-    `🚀 Server chạy tại cổng ${PORT}`
+    `🚀 Server chạy cổng ${PORT}`
   );
 
   loadData();
