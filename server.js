@@ -10,15 +10,15 @@ const MAX_SESSIONS = 10000;
 const FETCH_INTERVAL = 2000;
 const AUTO_SAVE_INTERVAL = 30000;
 
+// ===== API =====
 const API_URL =
-  "https://wtxmd52.tele68.com/v1/txmd5/lite-sessions?cp=R&cl=R&pf=web&at=62385f65eb49fcb34c72a7d6489ad91d";
+  "https://wtxmd52.tele68.com/v1/txmd5/lite-sessions?cp=R&cl=R&pf=web&at=d303d4ad1816299ff47d24cdaf262a68";
+
+const TOKEN =
+  "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJjb2RlIjowLCJtZXNzYWdlIjoiU3VjY2VzcyIsIm5pY2tOYW1lIjoianNqZGpkamp4IiwiYWNjZXNzVG9rZW4iOiJkMzAzZDRhZDE4MTYyOTlmZjQ3ZDI0Y2RhZjI2MmE2OCIsImlzTG9naW4iOnRydWUsIm1vbmV5Ijo1OSwiaWQiOiI3NzI3MzA1IiwidXNlcm5hbWUiOiJodXBsYW5oa29rayIsImlhdCI6MTc3OTUyOTI4NSwiZXhwIjoxNzc5NTU4MDg1fQ.nqKCFZ7uea37wp-xR1MLSvq-gm_klNQD-HpNVGRGpig";
 
 // ===== STORE =====
 let sessionsStore = [];
-
-function getTaiXiu(total) {
-  return total >= 11 ? "TÀI" : "XỈU";
-}
 
 // ===== LOAD =====
 function loadData() {
@@ -30,11 +30,11 @@ function loadData() {
       sessionsStore = parsed.sessionsStore || [];
 
       console.log(
-        `✅ Load ${sessionsStore.length} phiên`
+        `✅ Loaded ${sessionsStore.length} phiên`
       );
     }
-  } catch (e) {
-    console.log("❌ Load lỗi:", e.message);
+  } catch (err) {
+    console.log("❌ Load lỗi:", err.message);
   }
 }
 
@@ -53,14 +53,14 @@ function saveData() {
     );
 
     console.log("💾 Saved");
-  } catch (e) {
-    console.log("❌ Save lỗi:", e.message);
+  } catch (err) {
+    console.log("❌ Save lỗi:", err.message);
   }
 }
 
-// ===== THUẬT TOÁN =====
+// ===== DỰ ĐOÁN =====
 function predict() {
-  if (sessionsStore.length < 10) {
+  if (sessionsStore.length < 20) {
     return {
       prediction: "ĐANG HỌC",
       confidence: 0,
@@ -73,18 +73,17 @@ function predict() {
   let xiu = 0;
 
   recent.forEach((i) => {
-    if (i.result === "TÀI") tai++;
+    if (i.result === "TAI") tai++;
     else xiu++;
   });
 
   const prediction =
-    tai > xiu ? "XỈU" : "TÀI";
+    tai > xiu ? "XIU" : "TAI";
 
-  const confidence =
-    (
-      (Math.abs(tai - xiu) / 20) *
-      100
-    ).toFixed(2);
+  const confidence = (
+    (Math.abs(tai - xiu) / 20) *
+    100
+  ).toFixed(2);
 
   return {
     prediction,
@@ -97,92 +96,65 @@ function predict() {
 // ===== FETCH =====
 async function fetchSessions() {
   try {
-    const response = await axios.get(API_URL);
+    const response = await axios.get(API_URL, {
+      headers: {
+        "Content-Type":
+          "application/json",
+        Authorization: TOKEN,
+      },
+    });
 
-    const data = response.data;
-
-    // API tele68 trả ở đây
-    const list =
-      data?.data?.sessions ||
-      data?.data ||
-      [];
+    const list = response.data?.list || [];
 
     if (!Array.isArray(list)) {
-      console.log("❌ Không có mảng sessions");
+      console.log("❌ API lỗi");
       return;
     }
 
     let added = 0;
 
     for (const item of list) {
-      const phien =
-        item.sid ||
-        item.session ||
-        item.phien;
-
-      if (!phien) continue;
-
-      // tránh trùng
       const exists = sessionsStore.find(
-        (x) => x.phien == phien
+        (x) => x.id === item.id
       );
 
       if (exists) continue;
 
-      // xúc xắc
-      const dice = item.dice || [];
-
-      let total = 0;
-
-      if (Array.isArray(dice)) {
-        total = dice.reduce(
-          (a, b) => a + Number(b),
-          0
-        );
-      }
-
-      const result = getTaiXiu(total);
-
       sessionsStore.push({
-        phien,
-        dice,
-        total,
-        result,
-        raw: item,
-        time: Date.now(),
+        id: item.id,
+        phien: item.id,
+        result: item.resultTruyenThong,
+        dices: item.dices,
+        point: item.point,
+        _id: item._id,
       });
 
       added++;
     }
 
-    // sắp xếp phiên
+    // sort theo phiên mới nhất
     sessionsStore.sort(
-      (a, b) => Number(a.phien) - Number(b.phien)
+      (a, b) => b.id - a.id
     );
 
-    // giới hạn 10000 phiên
+    // giữ tối đa 10000 phiên
     if (
       sessionsStore.length > MAX_SESSIONS
     ) {
       sessionsStore =
         sessionsStore.slice(
-          -MAX_SESSIONS
+          0,
+          MAX_SESSIONS
         );
     }
 
-    const p = predict();
-
     console.log(
-      `📥 +${added} | Tổng ${sessionsStore.length}`
+      `📥 +${added} phiên | Tổng ${sessionsStore.length}`
     );
-
-    console.log(
-      `🎯 ${p.prediction} (${p.confidence}%)`
-    );
-  } catch (e) {
+  } catch (err) {
     console.log(
       "❌ Fetch lỗi:",
-      e.message
+      err.message
     );
   }
 }
@@ -190,11 +162,6 @@ async function fetchSessions() {
 // ===== API =====
 app.get("/", (req, res) => {
   const p = predict();
-
-  const latest =
-    sessionsStore[
-      sessionsStore.length - 1
-    ] || null;
 
   res.json({
     status: "running",
@@ -211,11 +178,11 @@ app.get("/", (req, res) => {
     tai: p.tai || 0,
     xiu: p.xiu || 0,
 
-    latest,
+    latest:
+      sessionsStore[0] || null,
 
-    history: sessionsStore
-      .slice(-50)
-      .reverse(),
+    // HIỆN TOÀN BỘ LỊCH SỬ
+    history: sessionsStore,
   });
 });
 
